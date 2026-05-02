@@ -3,63 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
-    <title>Portfolio</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <title>Professional Portfolio</title>
     <style>
         body {
-            font-family: 'Roboto', sans-serif;
+            font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
-            background: linear-gradient(135deg, #f3ecec, #d2c7c7);
-            color: #333;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            transition: background 0.5s;
+            background: linear-gradient(135deg, #6a5acd, #00bfff);
+            color: white;
+        }
+        header {
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            text-align: center;
         }
         h1 {
-            font-size: 2.5em;
-            margin-bottom: 0.5em;
-            animation: fadeIn 1s;
-            text-align: center;
-        }
-        p {
-            font-size: 1.2em;
-            margin: 0.5em 0;
-            animation: fadeIn 1.5s;
-            text-align: center;
-        }
-        @keyframes fadeIn {
-            from {opacity: 0;}
-            to {opacity: 1;}
+            margin: 0;
         }
         .container {
-            max-width: 800px;
-            padding: 2em;
+            width: 80%;
+            margin: auto;
+        }
+        .hero {
+            padding: 50px 0;
+        }
+        .about, .skills, .experience, .projects, .contact {
+            padding: 30px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .skills-grid, .projects-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        .skill-card, .project-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
-            background: #fff;
-            transition: transform 0.3s;
+            text-align: center;
         }
-        .container:hover {
-            transform: scale(1.02);
+        .experience-timeline {
+            position: relative;
+            padding: 20px 0;
         }
-        @media(min-width: 600px) {
-            h1 {
-                font-size: 3em;
-            }
-            p {
-                font-size: 1.5em;
-            }
+        .experience-timeline::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            width: 4px;
+            background: white;
+            height: 100%;
+        }
+        .experience-item {
+            position: relative;
+            margin: 20px 0;
+            padding-left: 30px;
+        }
+        .experience-item::before {
+            content: '';
+            position: absolute;
+            left: -12px;
+            top: 10px;
+            width: 20px;
+            height: 20px;
+            background: #00bfff;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
         }
     </style>
 </head>
 <body>
+    <header>
+        <h1>My Professional Portfolio</h1>
+    </header>
     <div class="container">
-        <h1>Welcome to My Portfolio</h1>
-        <p>This is a showcase of my work and projects.</p>
+        <section class="hero">
+            <h2>Welcome to My Portfolio</h2>
+            <p>I am a passionate web developer specializing in modern web technologies.</p>
+        </section>
+        <section class="about">
+            <h2>About Me</h2>
+            <p>Detail about background, education, and career goals.</p>
+        </section>
+        <section class="skills">
+            <h2>Skills</h2>
+            <div class="skills-grid">
+                <div class="skill-card">HTML</div>
+                <div class="skill-card">CSS</div>
+                <div class="skill-card">JavaScript</div>
+                <div class="skill-card">React</div>
+                <div class="skill-card">Node.js</div>
+            </div>
+        </section>
+        <section class="experience">
+            <h2>Experience Timeline</h2>
+            <div class="experience-timeline">
+                <div class="experience-item">
+                    <h3>Job Title at Company</h3>
+                    <p>Dates of employment</p>
+                    <p>Responsibilities and achievements.</p>
+                </div>
+                <div class="experience-item">
+                    <h3>Job Title at Company</h3>
+                    <p>Dates of employment</p>
+                    <p>Responsibilities and achievements.</p>
+                </div>
+            </div>
+        </section>
+        <section class="projects">
+            <h2>Projects Showcase</h2>
+            <div class="projects-grid">
+                <div class="project-card">Project 1</div>
+                <div class="project-card">Project 2</div>
+                <div class="project-card">Project 3</div>
+            </div>
+        </section>
+        <section class="contact">
+            <h2>Contact Information</h2>
+            <p>Email: <a href="mailto:youremail@example.com">youremail@example.com</a></p>
+            <p>LinkedIn: <a href="https://linkedin.com">Your LinkedIn Profile</a></p>
+        </section>
     </div>
 </body>
 </html>
