@@ -1,1 +1,65 @@
-<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n    <title>Abhishek's Portfolio</title>\n    <style>\n        body {\n            font-family: Arial, sans-serif;\n            margin: 0;\n            padding: 0;\n            box-sizing: border-box;\n            display: flex;\n            flex-direction: column;\n            align-items: center;\n            background-color: #f4f4f4;\n        }\n        header {\n            background: #007bff;\n            color: white;\n            width: 100%;\n            padding: 20px 0;\n            text-align: center;\n        }\n        section {\n            padding: 20px;\n            max-width: 800px;\n            width: 100%;\n            margin: 10px 0;\n            background: white;\n            border-radius: 8px;\n            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);\n        }\n        h2 {\n            color: #333;\n        }\n        footer {\n            margin: 20px 0;\n        }\n    </style>\n</head>\n<body>\n    <header>\n        <h1>Abhishek's Portfolio</h1>\n        <p>Data Analyst with 3 Years of Experience</p>\n    </header>\n    <section id="about">\n        <h2>About Me</h2>\n        <p>I am a passionate data analyst with 3 years of experience in transforming data into actionable insights, supporting decision-making, and enhancing operational efficiency.</p>\n    </section>\n    <section id="skills">\n        <h2>Skills</h2>\n        <ul>\n            <li>Data Visualization (Tableau, Power BI)</li>\n            <li>Statistical Analysis (R, Python)</li>\n            <li>SQL for Data Management</li>\n            <li>Excel for Data Analysis</li>\n            <li>Business Intelligence</li>\n        </ul>\n    </section>\n    <section id="experience">\n        <h2>Experience</h2>\n        <p>Data Analyst at XYZ Company (2023 - Present)</p>\n        <p>Junior Data Analyst at ABC Corp (2020 - 2023)</p>\n    </section>\n    <section id="projects">\n        <h2>Projects</h2>\n        <ul>\n            <li>Project A: Analysis of Sales Data to Improve Revenue.</li>\n            <li>Project B: Development of Interactive Dashboards for KPI Monitoring.</li>\n            <li>Project C: Customer Segmentation Analysis for Targeted Marketing.</li>\n        </ul>\n    </section>\n    <section id="contact">\n        <h2>Contact</h2>\n        <p>Email: abhishek@example.com</p>\n        <p>LinkedIn: linkedin.com/in/abhishek</p>\n    </section>\n    <footer>\n        <p>&copy; 2026 Abhishek. All rights reserved.</p>\n    </footer>\n</body>\n</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <title>Portfolio</title>
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f3ecec, #d2c7c7);
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            transition: background 0.5s;
+        }
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 0.5em;
+            animation: fadeIn 1s;
+            text-align: center;
+        }
+        p {
+            font-size: 1.2em;
+            margin: 0.5em 0;
+            animation: fadeIn 1.5s;
+            text-align: center;
+        }
+        @keyframes fadeIn {
+            from {opacity: 0;}
+            to {opacity: 1;}
+        }
+        .container {
+            max-width: 800px;
+            padding: 2em;
+            border-radius: 10px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            background: #fff;
+            transition: transform 0.3s;
+        }
+        .container:hover {
+            transform: scale(1.02);
+        }
+        @media(min-width: 600px) {
+            h1 {
+                font-size: 3em;
+            }
+            p {
+                font-size: 1.5em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My Portfolio</h1>
+        <p>This is a showcase of my work and projects.</p>
+    </div>
+</body>
+</html>
