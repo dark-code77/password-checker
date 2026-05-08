@@ -1,7 +1,8 @@
 """
-PDF Link Checker with Excel Export
-===================================
+PDF Link Checker with Excel Export & GUI
+=========================================
 Comprehensive tool to validate all email and web addresses in PDFs.
+Includes file picker dialog for easy PDF selection.
 
 Checks for:
 1. Missing hyperlinks (text visible but not clickable)
@@ -11,12 +12,13 @@ Checks for:
 5. Wrong link targets (mismatch between text and href)
 
 Usage:
-    python pdf_link_checker.py document.pdf
-    python pdf_link_checker.py document.pdf --output my_report.xlsx
-    python pdf_link_checker.py document.pdf --verbose
+    python pdf_link_checker.py                    (GUI mode - opens file picker)
+    python pdf_link_checker.py document.pdf       (Direct mode)
+    python pdf_link_checker.py document.pdf -o my_report.xlsx
+    python pdf_link_checker.py document.pdf -v
 
 Requirements:
-    pip install pypdf pdfplumber openpyxl
+    pip install pypdf pdfplumber openpyxl tkinter
 
 Output Columns (Excel):
     A: PDF_Link           - Address found in PDF text
@@ -86,6 +88,33 @@ class ExcelRow:
     is_valid: str                # Column F: "Yes" or "No"
     hyperlink_points_to: str     # Column G
     result: str                  # Column H: "Pass" or "Fail"
+
+
+# ============================================================================
+# FILE PICKER GUI
+# ============================================================================
+
+def select_pdf_file():
+    """Open file picker dialog to select PDF."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        root.attributes('-topmost', True)  # Bring to front
+        
+        file_path = filedialog.askopenfilename(
+            title="PDF फ़ाइल चुनें / Select PDF File",
+            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")]
+        )
+        
+        root.destroy()
+        return file_path
+    except ImportError:
+        print("❌ tkinter not installed!")
+        print("Install it with: pip install tk")
+        return None
 
 
 # ============================================================================
@@ -442,7 +471,7 @@ def export_excel(rows: List[ExcelRow], output_path: str):
     """Export validation results to Excel."""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.styles import PatternFill, Font, Alignment
     except ImportError:
         print("❌ openpyxl required: pip install openpyxl")
         return
@@ -532,21 +561,32 @@ def export_excel(rows: List[ExcelRow], output_path: str):
 def main():
     parser = argparse.ArgumentParser(
         description="Validate all hyperlinks in a PDF document.",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
     )
-    parser.add_argument("pdf", help="Path to PDF file")
+    parser.add_argument("pdf", nargs='?', default=None, help="Path to PDF file (optional)")
     parser.add_argument("-o", "--output", help="Output Excel file path (.xlsx)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed validation messages")
 
     args = parser.parse_args()
 
+    # If no PDF provided, open file picker
+    pdf_path = args.pdf
+    if not pdf_path:
+        print("🔍 Opening file picker...\n")
+        pdf_path = select_pdf_file()
+        
+        if not pdf_path:
+            print("❌ No file selected!")
+            sys.exit(1)
+
     # Check file exists
-    if not os.path.exists(args.pdf):
-        print(f"❌ File not found: {args.pdf}")
+    if not os.path.exists(pdf_path):
+        print(f"❌ File not found: {pdf_path}")
         sys.exit(1)
 
     # Run validation
-    rows = validate_pdf(args.pdf, verbose=args.verbose)
+    rows = validate_pdf(pdf_path, verbose=args.verbose)
 
     # Print summary
     print("=" * 72)
@@ -567,7 +607,7 @@ def main():
     if args.output:
         output_file = args.output if args.output.lower().endswith('.xlsx') else args.output + '.xlsx'
     else:
-        base = os.path.splitext(os.path.basename(args.pdf))[0]
+        base = os.path.splitext(os.path.basename(pdf_path))[0]
         output_file = f"{base}_validation_report.xlsx"
 
     export_excel(rows, output_file)
