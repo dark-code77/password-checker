@@ -22,7 +22,7 @@ import sys
 import argparse
 import pdfplumber
 from pypdf import PdfReader
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -75,14 +75,14 @@ class TextToken:
 @dataclass
 class CheckResult:
     """Result of checking a single link."""
-    pdf_link: str
-    hyperlink_text: str
-    page_num: int
-    link_type: str  # "Email" or "Web Link"
-    is_hyperlinked: str  # "Yes" or "No"
-    is_valid: str  # "Yes" or "No"
-    hyperlink_points_to: str  # The actual URI or "No Link"
-    result: str  # "Pass" or "Fail"
+    pdf_link: str                    # Column A: The address found in PDF text
+    hyperlink_text: str              # Column B: The actual URI behind the link
+    page_num: int                    # Column C: Page number
+    link_type: str                   # Column D: "Email" or "Web Link"
+    is_hyperlinked: str              # Column E: "Yes" or "No"
+    is_valid: str                    # Column F: "Yes" or "No" (comparison valid?)
+    hyperlink_points_to: str         # Column G: Where the hyperlink points to
+    result: str                      # Column H: "Pass" or "Fail"
 
 
 @dataclass
@@ -372,7 +372,7 @@ def export_to_excel(results: list[CheckResult], output_path: str):
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     # Add data rows
     pass_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -401,12 +401,12 @@ def export_to_excel(results: list[CheckResult], output_path: str):
 
     # Adjust column widths
     ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["B"].width = 35
     ws.column_dimensions["C"].width = 12
     ws.column_dimensions["D"].width = 12
     ws.column_dimensions["E"].width = 15
     ws.column_dimensions["F"].width = 12
-    ws.column_dimensions["G"].width = 30
+    ws.column_dimensions["G"].width = 35
     ws.column_dimensions["H"].width = 12
 
     wb.save(output_path)
@@ -419,7 +419,6 @@ def export_to_excel(results: list[CheckResult], output_path: str):
 
 def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
     results: list[CheckResult] = []
-    issues: list[Issue] = []
 
     print(f"📄  Loading: {pdf_path}")
     annotations  = extract_annotations(pdf_path)
@@ -434,15 +433,10 @@ def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
     # -----------------------------------------------------------------------
     # Pass 1 — Single-line addresses
     # -----------------------------------------------------------------------
-    processed_tokens: set[int] = set()  # token ids already handled
 
     for line in lines:
         found = scan_line_for_addresses(line)
         for addr, covering_tokens in found:
-            # Mark tokens
-            for t in covering_tokens:
-                processed_tokens.add(id(t))
-
             page = covering_tokens[0].page_num + 1
             is_email = bool(EMAIL_RE.fullmatch(addr))
             is_url   = bool(URL_RE.match(addr))
@@ -458,60 +452,46 @@ def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
 
             unique_uris = list({a.uri for a in links})
 
-            # Create result entry
+            # Determine hyperlink status
             is_hyperlinked = "Yes" if unique_uris else "No"
             hyperlink_text = unique_uris[0] if unique_uris else "No Link"
+            hyperlink_points_to = hyperlink_text
             
             is_valid = "Yes"
             result = "Pass"
 
-            # ---- Check 1: No link at all ----
+            # Perform checks
             if not unique_uris:
+                # Check 1: No link at all
                 is_valid = "No"
                 result = "Fail"
-                issues.append(Issue(
-                    page=page,
-                    issue_type="MISSING LINK",
-                    displayed_text=addr,
-                    linked_uri=None,
-                    detail=f"{'Email' if is_email else 'Web'} address has no hyperlink.",
-                ))
+                if verbose:
+                    print(f"  ❌ Page {page}: \"{addr}\" → NO LINK")
             else:
-                # ---- Check 2 & 5: Wrong link type / wrong target ----
+                # Check 2 & 5: Wrong link type or wrong target
+                all_valid = True
                 for uri in unique_uris:
                     if is_email and is_web_uri(uri):
                         is_valid = "No"
                         result = "Fail"
-                        issues.append(Issue(
-                            page=page,
-                            issue_type="WRONG LINK TYPE",
-                            displayed_text=addr,
-                            linked_uri=uri,
-                            detail="Email address is linked to a web URL instead of a mailto: link.",
-                        ))
+                        all_valid = False
+                        if verbose:
+                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (WRONG TYPE: Email→Web)")
                     elif is_url and is_email_uri(uri):
                         is_valid = "No"
                         result = "Fail"
-                        issues.append(Issue(
-                            page=page,
-                            issue_type="WRONG LINK TYPE",
-                            displayed_text=addr,
-                            linked_uri=uri,
-                            detail="Web URL is linked to a mailto: email link instead of a web URL.",
-                        ))
+                        all_valid = False
+                        if verbose:
+                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (WRONG TYPE: Web→Email)")
                     elif not addresses_match(addr, uri):
                         is_valid = "No"
                         result = "Fail"
-                        issues.append(Issue(
-                            page=page,
-                            issue_type="WRONG TARGET",
-                            displayed_text=addr,
-                            linked_uri=uri,
-                            detail=f"Displayed address does not match the actual link target.",
-                        ))
-                    else:
+                        all_valid = False
                         if verbose:
-                            print(f"  ✅ Page {page}: \"{addr}\" → {uri}")
+                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (MISMATCH)")
+                
+                if all_valid and verbose:
+                    print(f"  ✅ Page {page}: \"{addr}\" → {unique_uris[0]}")
 
             results.append(CheckResult(
                 pdf_link=addr,
@@ -520,7 +500,7 @@ def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
                 link_type=link_type,
                 is_hyperlinked=is_hyperlinked,
                 is_valid=is_valid,
-                hyperlink_points_to=hyperlink_text,
+                hyperlink_points_to=hyperlink_points_to,
                 result=result
             ))
 
@@ -531,34 +511,7 @@ def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
 # Reporting
 # ---------------------------------------------------------------------------
 
-ISSUE_SYMBOLS = {
-    "MISSING LINK":                "🔴",
-    "WRONG LINK TYPE":             "🟠",
-    "WRONG TARGET":                "🟡",
-    "SPLIT ADDRESS — NO LINK":     "🔴",
-    "SPLIT ADDRESS — PARTIAL LINK":"🟠",
-    "SPLIT ADDRESS — DIFFERENT LINKS": "🟠",
-    "SPLIT ADDRESS — WRONG TARGET":"🟡",
-    "SPLIT URL — NO LINK":         "🔴",
-    "SPLIT URL — PARTIAL LINK":    "🟠",
-    "SPLIT URL — DIFFERENT LINKS": "🟠",
-}
-
-ISSUE_ORDER = {
-    "MISSING LINK": 0,
-    "SPLIT ADDRESS — NO LINK": 0,
-    "SPLIT URL — NO LINK": 0,
-    "WRONG LINK TYPE": 1,
-    "SPLIT ADDRESS — PARTIAL LINK": 1,
-    "SPLIT URL — PARTIAL LINK": 1,
-    "SPLIT ADDRESS — DIFFERENT LINKS": 1,
-    "SPLIT URL — DIFFERENT LINKS": 1,
-    "WRONG TARGET": 2,
-    "SPLIT ADDRESS — WRONG TARGET": 2,
-}
-
-
-def render_report(pdf_path: str, results: list[CheckResult], output_path: Optional[str] = None):
+def render_report(pdf_path: str, results: list[CheckResult]):
     lines = []
     sep   = "=" * 72
 
@@ -577,7 +530,8 @@ def render_report(pdf_path: str, results: list[CheckResult], output_path: Option
         
         lines.append(f"\n📊 Summary:")
         lines.append(f"   ✅ Pass: {passes}")
-        lines.append(f"   ❌ Fail: {fails}\n")
+        lines.append(f"   ❌ Fail: {fails}")
+        lines.append(f"   📈 Success Rate: {(passes/(passes+fails)*100):.1f}%\n" if (passes+fails) > 0 else "")
 
     report = "\n".join(lines)
     print(report)
@@ -595,7 +549,7 @@ def main():
     )
     parser.add_argument("pdf", help="Path to the PDF file to check")
     parser.add_argument("--output", "-o", help="Save report to Excel file (.xlsx)", default=None)
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show passing checks too")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed checks")
     args = parser.parse_args()
 
     results = check_pdf(args.pdf, verbose=args.verbose)
