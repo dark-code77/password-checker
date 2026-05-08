@@ -1,69 +1,72 @@
 """
-PDF Link Checker
-================
-Checks all email and web addresses in a PDF for:
+PDF Link Checker with Excel Export
+===================================
+Comprehensive tool to validate all email and web addresses in PDFs.
+
+Checks for:
 1. Missing hyperlinks (text visible but not clickable)
-2. Wrong link type (email linked to URL, URL linked to mailto, etc.)
-3. Broken/split addresses across lines — detects if parts join to form a valid address
-4. Split-address partial linking (one part linked, other not — or parts linked to different targets)
-5. Wrong link targets (displayed address doesn't match the actual href)
+2. Wrong link type (email linked to URL, URL linked to mailto)
+3. Broken/split addresses across lines
+4. Partial linking in split addresses
+5. Wrong link targets (mismatch between text and href)
 
 Usage:
-    python pdf_link_checker.py your_file.pdf
-    python pdf_link_checker.py your_file.pdf --output report.xlsx
-    python pdf_link_checker.py your_file.pdf --verbose
+    python pdf_link_checker.py document.pdf
+    python pdf_link_checker.py document.pdf --output my_report.xlsx
+    python pdf_link_checker.py document.pdf --verbose
 
 Requirements:
     pip install pypdf pdfplumber openpyxl
+
+Output Columns (Excel):
+    A: PDF_Link           - Address found in PDF text
+    B: Hyperlink_Text     - Actual link URI or "No Link"
+    C: Page_Numb          - Page number where found
+    D: Link_Type          - "Email" or "Web Link"
+    E: Is_Hyperlinked     - "Yes" or "No"
+    F: Is_Valid           - "Yes" (match OK) or "No" (mismatch)
+    G: Hyperlink_Points_To - Destination of hyperlink
+    H: Result             - "Pass" (all checks OK) or "Fail" (any check failed)
 """
 
 import re
 import sys
+import os
 import argparse
 import pdfplumber
 from pypdf import PdfReader
 from dataclasses import dataclass
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Optional, List, Dict, Tuple
 
 
-# ---------------------------------------------------------------------------
-# Patterns
-# ---------------------------------------------------------------------------
+# ============================================================================
+# REGEX PATTERNS
+# ============================================================================
 
-EMAIL_RE = re.compile(
+EMAIL_REGEX = re.compile(
     r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
 )
 
-URL_RE = re.compile(
-    r"(?:https?://|www\.)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"
-)
-
-# Fragmented email: left part (before @), right part (after @)
-EMAIL_LEFT_RE  = re.compile(r"[a-zA-Z0-9._%+\-]+@$|[a-zA-Z0-9._%+\-]+@\s*$")
-EMAIL_RIGHT_RE = re.compile(r"^[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-
-# Fragmented URL: ends mid-word (no space after last valid char)
-URL_FRAGMENT_RE = re.compile(
+URL_REGEX = re.compile(
     r"(?:https?://|www\.)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"
 )
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
+# ============================================================================
+# DATA CLASSES
+# ============================================================================
 
 @dataclass
 class LinkAnnotation:
-    """A clickable hyperlink annotation found in the PDF."""
-    page_num: int       # 0-based
-    uri: str            # The actual href (e.g. "mailto:a@b.com" or "https://...")
-    rect: tuple         # (x0, y0, x1, y1) in PDF coordinates
+    """Represents a hyperlink annotation in the PDF."""
+    page_num: int           # 0-based page number
+    uri: str                # Actual href (e.g., "mailto:a@b.com" or "https://...")
+    rect: tuple             # (x0, y0, x1, y1) in PDF coordinates
 
 
 @dataclass
 class TextToken:
-    """A word/token extracted from the PDF with its bounding box."""
+    """Represents a word/token extracted from PDF with location."""
     page_num: int
     text: str
     x0: float
@@ -73,120 +76,104 @@ class TextToken:
 
 
 @dataclass
-class CheckResult:
-    """Result of checking a single link."""
-    pdf_link: str                    # Column A: The address found in PDF text
-    hyperlink_text: str              # Column B: The actual URI behind the link
-    page_num: int                    # Column C: Page number
-    link_type: str                   # Column D: "Email" or "Web Link"
-    is_hyperlinked: str              # Column E: "Yes" or "No"
-    is_valid: str                    # Column F: "Yes" or "No" (comparison valid?)
-    hyperlink_points_to: str         # Column G: Where the hyperlink points to
-    result: str                      # Column H: "Pass" or "Fail"
+class ExcelRow:
+    """Excel report row with validation results."""
+    pdf_link: str                # Column A
+    hyperlink_text: str          # Column B
+    page_num: int                # Column C
+    link_type: str               # Column D: "Email" or "Web Link"
+    is_hyperlinked: str          # Column E: "Yes" or "No"
+    is_valid: str                # Column F: "Yes" or "No"
+    hyperlink_points_to: str     # Column G
+    result: str                  # Column H: "Pass" or "Fail"
 
 
-@dataclass
-class Issue:
-    page: int
-    issue_type: str
-    displayed_text: str
-    linked_uri: Optional[str]
-    detail: str
+# ============================================================================
+# PDF EXTRACTION FUNCTIONS
+# ============================================================================
 
-    def __str__(self):
-        uri_str = f'  → Linked URI : "{self.linked_uri}"' if self.linked_uri else "  → No hyperlink found"
-        return (
-            f"[Page {self.page}] [{self.issue_type}]\n"
-            f"  Displayed    : \"{self.displayed_text}\"\n"
-            f"{uri_str}\n"
-            f"  Detail       : {self.detail}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Extraction helpers
-# ---------------------------------------------------------------------------
-
-def extract_annotations(pdf_path: str) -> list[LinkAnnotation]:
-    """Extract all URI link annotations from every page."""
-    annotations = []
+def extract_hyperlinks(pdf_path: str) -> List[LinkAnnotation]:
+    """Extract all hyperlink annotations from PDF."""
+    links = []
     reader = PdfReader(pdf_path)
 
-    for page_num, page in enumerate(reader.pages):
+    for page_idx, page in enumerate(reader.pages):
         if "/Annots" not in page:
             continue
+
         annots = page["/Annots"]
         if annots is None:
             continue
 
-        # Page height for coordinate conversion (PDF y=0 is bottom-left)
         page_height = float(page.mediabox.height)
 
         for annot_ref in annots:
             try:
                 annot = annot_ref.get_object() if hasattr(annot_ref, "get_object") else annot_ref
+                
+                # Only process Link annotations
                 if annot.get("/Subtype") != "/Link":
                     continue
+
                 action = annot.get("/A")
                 if action is None:
                     continue
+
+                # Only URI links (ignore other types)
                 if action.get("/S") != "/URI":
                     continue
+
                 uri = str(action.get("/URI", ""))
                 rect_raw = annot.get("/Rect")
                 if rect_raw is None:
                     continue
-                # Convert PDF rect (bottom-left origin) → top-left origin
+
+                # Convert PDF coordinates (bottom-left origin) to screen coords
                 rx0, ry0, rx1, ry1 = [float(v) for v in rect_raw]
-                # Normalise so x0<x1, y0<y1
                 x0, x1 = sorted([rx0, rx1])
-                # Convert y from bottom-left to top-left
                 y0 = page_height - max(ry0, ry1)
                 y1 = page_height - min(ry0, ry1)
-                annotations.append(LinkAnnotation(page_num, uri, (x0, y0, x1, y1)))
-            except Exception:
+
+                links.append(LinkAnnotation(page_idx, uri, (x0, y0, x1, y1)))
+            except Exception as e:
                 continue
 
-    return annotations
+    return links
 
 
-def extract_words(pdf_path: str) -> list[TextToken]:
-    """Extract every word with its bounding box using pdfplumber."""
+def extract_text_tokens(pdf_path: str) -> List[TextToken]:
+    """Extract all words from PDF with their positions."""
     tokens = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages):
+        for page_idx, page in enumerate(pdf.pages):
             words = page.extract_words(
                 x_tolerance=3,
                 y_tolerance=3,
                 keep_blank_chars=False,
                 use_text_flow=False,
-                extra_attrs=["fontname", "size"],
             )
-            for w in words:
+            for word in words:
                 tokens.append(TextToken(
-                    page_num=page_num,
-                    text=w["text"],
-                    x0=w["x0"],
-                    y0=w["top"],
-                    x1=w["x1"],
-                    y1=w["bottom"],
+                    page_num=page_idx,
+                    text=word["text"],
+                    x0=word["x0"],
+                    y0=word["top"],
+                    x1=word["x1"],
+                    y1=word["bottom"],
                 ))
     return tokens
 
 
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# GEOMETRY HELPERS
+# ============================================================================
 
-def rect_overlap(a: tuple, b: tuple, threshold: float = 0.3) -> bool:
-    """
-    Returns True if rectangles a and b overlap by at least `threshold`
-    of the smaller rectangle's area.
-    a, b = (x0, y0, x1, y1)
-    """
-    ax0, ay0, ax1, ay1 = a
-    bx0, by0, bx1, by1 = b
+def rectangles_overlap(rect_a: tuple, rect_b: tuple, threshold: float = 0.3) -> bool:
+    """Check if two rectangles overlap by at least threshold percentage."""
+    ax0, ay0, ax1, ay1 = rect_a
+    bx0, by0, bx1, by1 = rect_b
 
+    # Calculate intersection
     ix0 = max(ax0, bx0)
     iy0 = max(ay0, by0)
     ix1 = min(ax1, bx1)
@@ -195,165 +182,276 @@ def rect_overlap(a: tuple, b: tuple, threshold: float = 0.3) -> bool:
     if ix1 <= ix0 or iy1 <= iy0:
         return False
 
-    inter_area = (ix1 - ix0) * (iy1 - iy0)
-    a_area = (ax1 - ax0) * (ay1 - ay0)
-    b_area = (bx1 - bx0) * (by1 - by0)
-    smaller = min(a_area, b_area)
-    if smaller == 0:
+    intersection = (ix1 - ix0) * (iy1 - iy0)
+    area_a = (ax1 - ax0) * (ay1 - ay0)
+    area_b = (bx1 - bx0) * (by1 - by0)
+    min_area = min(area_a, area_b)
+
+    if min_area == 0:
         return False
-    return (inter_area / smaller) >= threshold
+
+    return (intersection / min_area) >= threshold
 
 
-def find_covering_link(
+def find_hyperlink_for_token(
     token: TextToken,
-    annotations: list[LinkAnnotation],
-    page_annotations: dict[int, list[LinkAnnotation]],
+    links: List[LinkAnnotation],
+    page_links_map: Dict[int, List[LinkAnnotation]]
 ) -> Optional[LinkAnnotation]:
-    """Return the annotation that covers this token, or None."""
-    for ann in page_annotations.get(token.page_num, []):
-        if rect_overlap(
+    """Find hyperlink annotation that covers this token."""
+    for link in page_links_map.get(token.page_num, []):
+        if rectangles_overlap(
             (token.x0, token.y0, token.x1, token.y1),
-            ann.rect,
+            link.rect,
         ):
-            return ann
+            return link
     return None
 
 
-def tokens_on_same_line(t1: TextToken, t2: TextToken, tol: float = 4.0) -> bool:
-    return abs(t1.y0 - t2.y0) < tol and t1.page_num == t2.page_num
+# ============================================================================
+# ADDRESS MATCHING FUNCTIONS
+# ============================================================================
 
-
-def tokens_adjacent_lines(t1: TextToken, t2: TextToken) -> bool:
-    """True if t2 is on the very next line after t1 (same page)."""
-    if t1.page_num != t2.page_num:
-        return False
-    line_height = (t1.y1 - t1.y0)
-    gap = t2.y0 - t1.y1
-    return 0 <= gap <= line_height * 2.5
-
-
-# ---------------------------------------------------------------------------
-# Address-type helpers
-# ---------------------------------------------------------------------------
-
-def is_email_uri(uri: str) -> bool:
+def is_mailto_link(uri: str) -> bool:
+    """Check if URI is a mailto link."""
     return uri.lower().startswith("mailto:")
 
 
-def is_web_uri(uri: str) -> bool:
-    return uri.lower().startswith("http://") or uri.lower().startswith("https://") or uri.lower().startswith("www.")
+def is_http_link(uri: str) -> bool:
+    """Check if URI is an HTTP/HTTPS/www link."""
+    uri_lower = uri.lower()
+    return (uri_lower.startswith("http://") or 
+            uri_lower.startswith("https://") or 
+            uri_lower.startswith("www."))
 
 
-def uri_email_address(uri: str) -> str:
-    """Extract the bare email from a mailto: URI."""
-    return uri[7:].split("?")[0].strip() if uri.lower().startswith("mailto:") else ""
+def extract_email_from_mailto(uri: str) -> str:
+    """Extract email address from mailto: URI."""
+    if uri.lower().startswith("mailto:"):
+        return uri[7:].split("?")[0].strip()
+    return ""
 
 
-def normalise_url(url: str) -> str:
-    """Strip trailing punctuation that may have been captured by regex."""
-    return url.rstrip(".,;:!?)\"'")
+def normalize_address(address: str) -> str:
+    """Remove trailing punctuation from address."""
+    return address.strip().rstrip(".,;:!?)\"'")
 
 
-def addresses_match(displayed: str, uri: str) -> bool:
+def addresses_match(displayed_text: str, uri: str) -> bool:
     """
-    Compare the displayed address text to the URI it is linked to.
-    For emails: displayed text should equal the mailto: address.
-    For URLs:   displayed text (with http/https/www normalised) should match URI.
+    Compare displayed text with URI destination.
+    Handles normalization for both emails and URLs.
     """
-    displayed = displayed.strip().rstrip(".,;:!?")
+    displayed = normalize_address(displayed_text)
 
-    if is_email_uri(uri):
-        uri_addr = uri_email_address(uri)
-        return displayed.lower() == uri_addr.lower()
+    # Email comparison
+    if is_mailto_link(uri):
+        email = extract_email_from_mailto(uri)
+        return displayed.lower() == email.lower()
 
-    if is_web_uri(uri):
-        # Normalise both sides for comparison
-        def norm(u):
-            u = u.lower().rstrip("/")
-            if u.startswith("http://"):  u = u[7:]
-            if u.startswith("https://"): u = u[8:]
-            if u.startswith("www."):     u = u[4:]
-            return u
-        return norm(displayed) == norm(uri)
+    # URL comparison (normalize protocols and www prefix)
+    if is_http_link(uri):
+        def normalize(url):
+            url = url.lower().rstrip("/")
+            if url.startswith("http://"):
+                url = url[7:]
+            elif url.startswith("https://"):
+                url = url[8:]
+            elif url.startswith("www."):
+                url = url[4:]
+            return url
+
+        return normalize(displayed) == normalize(uri)
 
     return False
 
 
-# ---------------------------------------------------------------------------
-# Core checker
-# ---------------------------------------------------------------------------
+# ============================================================================
+# GROUPING AND SCANNING FUNCTIONS
+# ============================================================================
 
-def build_page_annotation_index(annotations: list[LinkAnnotation]) -> dict[int, list[LinkAnnotation]]:
-    idx: dict[int, list[LinkAnnotation]] = {}
-    for ann in annotations:
-        idx.setdefault(ann.page_num, []).append(ann)
-    return idx
-
-
-def group_tokens_into_lines(tokens: list[TextToken]) -> list[list[TextToken]]:
-    """Group tokens by (page, approximate y-baseline) into lines."""
+def group_tokens_by_line(tokens: List[TextToken]) -> List[List[TextToken]]:
+    """Group tokens into lines based on Y position."""
     if not tokens:
         return []
-    lines: list[list[TextToken]] = []
+
+    lines = []
     current_line = [tokens[0]]
-    for tok in tokens[1:]:
-        if tokens_on_same_line(tok, current_line[-1]):
-            current_line.append(tok)
+
+    for token in tokens[1:]:
+        # Same page and similar Y position = same line
+        if (token.page_num == current_line[-1].page_num and
+            abs(token.y0 - current_line[-1].y0) < 4.0):
+            current_line.append(token)
         else:
             lines.append(current_line)
-            current_line = [tok]
+            current_line = [token]
+
     lines.append(current_line)
     return lines
 
 
-def scan_line_for_addresses(line_tokens: list[TextToken]) -> list[tuple[str, list[TextToken]]]:
+def find_addresses_in_line(tokens: List[TextToken]) -> List[Tuple[str, List[TextToken]]]:
     """
-    Join tokens on the same line and find email/URL patterns.
-    Returns list of (matched_address, [tokens_that_form_it]).
-    This is a best-effort spatial mapping.
+    Find all emails and URLs in a line of tokens.
+    Returns list of (address, covering_tokens).
     """
-    if not line_tokens:
+    if not tokens:
         return []
-    full_text = " ".join(t.text for t in line_tokens)
+
+    # Join tokens into single text
+    full_text = " ".join(t.text for t in tokens)
     results = []
 
-    for pattern in (EMAIL_RE, URL_RE):
-        for m in pattern.finditer(full_text):
-            addr = normalise_url(m.group())
-            # Map back to tokens (greedy span match)
-            covering = []
-            pos = 0
-            for tok in line_tokens:
-                tok_start = full_text.find(tok.text, pos)
-                tok_end   = tok_start + len(tok.text)
-                # Token overlaps the match span
-                if tok_start < m.end() and tok_end > m.start():
-                    covering.append(tok)
-                pos = tok_start + 1  # advance slightly
-            if covering:
-                results.append((addr, covering))
+    # Find all emails and URLs
+    for pattern in (EMAIL_REGEX, URL_REGEX):
+        for match in pattern.finditer(full_text):
+            address = normalize_address(match.group())
+            
+            # Map matched text back to tokens
+            covering_tokens = []
+            search_pos = 0
+
+            for token in tokens:
+                token_start = full_text.find(token.text, search_pos)
+                token_end = token_start + len(token.text)
+
+                # Token overlaps with match
+                if token_start < match.end() and token_end > match.start():
+                    covering_tokens.append(token)
+
+                search_pos = token_start + 1
+
+            if covering_tokens:
+                results.append((address, covering_tokens))
 
     return results
 
 
-# ---------------------------------------------------------------------------
-# Excel Export
-# ---------------------------------------------------------------------------
+# ============================================================================
+# MAIN VALIDATION LOGIC
+# ============================================================================
 
-def export_to_excel(results: list[CheckResult], output_path: str):
-    """Export check results to Excel file."""
+def validate_pdf(pdf_path: str, verbose: bool = False) -> List[ExcelRow]:
+    """Main validation function."""
+    rows = []
+
+    print(f"📄 Processing: {pdf_path}")
+    
+    # Extract content
+    hyperlinks = extract_hyperlinks(pdf_path)
+    tokens = extract_text_tokens(pdf_path)
+
+    # Build index for quick lookup
+    page_links_map = {}
+    for link in hyperlinks:
+        page_links_map.setdefault(link.page_num, []).append(link)
+
+    print(f"   Found {len(hyperlinks)} hyperlinks")
+    print(f"   Found {len(tokens)} text tokens\n")
+
+    # Group tokens and scan for addresses
+    lines = group_tokens_by_line(tokens)
+
+    for line in lines:
+        addresses = find_addresses_in_line(line)
+
+        for address, covering_tokens in addresses:
+            page_num = covering_tokens[0].page_num + 1
+
+            # Determine address type
+            is_email = bool(EMAIL_REGEX.fullmatch(address))
+            is_url = bool(URL_REGEX.match(address))
+            link_type = "Email" if is_email else "Web Link"
+
+            # Find hyperlinks covering this address
+            found_links = []
+            for token in covering_tokens:
+                link = find_hyperlink_for_token(token, hyperlinks, page_links_map)
+                if link:
+                    found_links.append(link)
+
+            unique_uris = list({link.uri for link in found_links})
+
+            # Initialize result
+            is_hyperlinked = "Yes" if unique_uris else "No"
+            hyperlink_text = unique_uris[0] if unique_uris else "No Link"
+            hyperlink_points = hyperlink_text
+            is_valid = "Yes"
+            result = "Pass"
+
+            # Validation checks
+            if not unique_uris:
+                # FAIL: No hyperlink found
+                is_valid = "No"
+                result = "Fail"
+                if verbose:
+                    print(f"  ❌ Page {page_num}: '{address}' → NO LINK")
+
+            else:
+                # Check link type and target
+                has_error = False
+                for uri in unique_uris:
+                    if is_email and is_http_link(uri):
+                        # Email linked to web URL
+                        is_valid = "No"
+                        result = "Fail"
+                        has_error = True
+                        if verbose:
+                            print(f"  ❌ Page {page_num}: '{address}' → {uri} (EMAIL→WEB)")
+
+                    elif is_url and is_mailto_link(uri):
+                        # URL linked to email
+                        is_valid = "No"
+                        result = "Fail"
+                        has_error = True
+                        if verbose:
+                            print(f"  ❌ Page {page_num}: '{address}' → {uri} (WEB→EMAIL)")
+
+                    elif not addresses_match(address, uri):
+                        # Address mismatch
+                        is_valid = "No"
+                        result = "Fail"
+                        has_error = True
+                        if verbose:
+                            print(f"  ❌ Page {page_num}: '{address}' → {uri} (MISMATCH)")
+
+                if not has_error and verbose:
+                    print(f"  ✅ Page {page_num}: '{address}' → {unique_uris[0]}")
+
+            # Create row
+            rows.append(ExcelRow(
+                pdf_link=address,
+                hyperlink_text=hyperlink_text,
+                page_num=page_num,
+                link_type=link_type,
+                is_hyperlinked=is_hyperlinked,
+                is_valid=is_valid,
+                hyperlink_points_to=hyperlink_points,
+                result=result
+            ))
+
+    return rows
+
+
+# ============================================================================
+# EXCEL EXPORT
+# ============================================================================
+
+def export_excel(rows: List[ExcelRow], output_path: str):
+    """Export validation results to Excel."""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     except ImportError:
-        print("❌ openpyxl not installed. Install it with: pip install openpyxl")
+        print("❌ openpyxl required: pip install openpyxl")
         return
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "PDF Link Check"
+    ws.title = "PDF Link Validation"
 
-    # Header row
+    # Headers
     headers = [
         "PDF_Link",
         "Hyperlink_Text",
@@ -368,207 +466,114 @@ def export_to_excel(results: list[CheckResult], output_path: str):
 
     # Style header
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # Add data rows
-    pass_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    fail_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    # Color fills for result column
+    pass_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
+    pass_font = Font(color="155724", bold=True)
+    
+    fail_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+    fail_font = Font(color="721C24", bold=True)
 
-    for result in results:
+    # Add data rows
+    for row in rows:
         ws.append([
-            result.pdf_link,
-            result.hyperlink_text,
-            result.page_num,
-            result.link_type,
-            result.is_hyperlinked,
-            result.is_valid,
-            result.hyperlink_points_to,
-            result.result
+            row.pdf_link,
+            row.hyperlink_text,
+            row.page_num,
+            row.link_type,
+            row.is_hyperlinked,
+            row.is_valid,
+            row.hyperlink_points_to,
+            row.result
         ])
 
         row_idx = ws.max_row
         result_cell = ws[f"H{row_idx}"]
-        if result.result == "Pass":
+
+        if row.result == "Pass":
             result_cell.fill = pass_fill
-            result_cell.font = Font(color="006100", bold=True)
+            result_cell.font = pass_font
         else:
             result_cell.fill = fail_fill
-            result_cell.font = Font(color="9C0006", bold=True)
+            result_cell.font = fail_font
 
-    # Adjust column widths
+    # Set column widths
     ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 35
+    ws.column_dimensions["B"].width = 40
     ws.column_dimensions["C"].width = 12
     ws.column_dimensions["D"].width = 12
-    ws.column_dimensions["E"].width = 15
-    ws.column_dimensions["F"].width = 12
-    ws.column_dimensions["G"].width = 35
-    ws.column_dimensions["H"].width = 12
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 11
+    ws.column_dimensions["G"].width = 40
+    ws.column_dimensions["H"].width = 10
+
+    # Center align most columns
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        for idx, cell in enumerate(row):
+            if idx in [2, 3, 4, 5, 7]:  # Center numeric and status columns
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
     wb.save(output_path)
-    print(f"✅ Report saved to: {output_path}")
+    print(f"✅ Report saved: {output_path}\n")
 
 
-# ---------------------------------------------------------------------------
-# Main analysis
-# ---------------------------------------------------------------------------
-
-def check_pdf(pdf_path: str, verbose: bool = False) -> list[CheckResult]:
-    results: list[CheckResult] = []
-
-    print(f"📄  Loading: {pdf_path}")
-    annotations  = extract_annotations(pdf_path)
-    page_ann_idx = build_page_annotation_index(annotations)
-    all_tokens   = extract_words(pdf_path)
-
-    print(f"    Found {len(annotations)} hyperlink annotations across all pages.")
-    print(f"    Found {len(all_tokens)} word tokens across all pages.\n")
-
-    lines = group_tokens_into_lines(all_tokens)
-
-    # -----------------------------------------------------------------------
-    # Pass 1 — Single-line addresses
-    # -----------------------------------------------------------------------
-
-    for line in lines:
-        found = scan_line_for_addresses(line)
-        for addr, covering_tokens in found:
-            page = covering_tokens[0].page_num + 1
-            is_email = bool(EMAIL_RE.fullmatch(addr))
-            is_url   = bool(URL_RE.match(addr))
-            
-            link_type = "Email" if is_email else "Web Link"
-
-            # Gather links covering these tokens
-            links = []
-            for tok in covering_tokens:
-                ann = find_covering_link(tok, annotations, page_ann_idx)
-                if ann:
-                    links.append(ann)
-
-            unique_uris = list({a.uri for a in links})
-
-            # Determine hyperlink status
-            is_hyperlinked = "Yes" if unique_uris else "No"
-            hyperlink_text = unique_uris[0] if unique_uris else "No Link"
-            hyperlink_points_to = hyperlink_text
-            
-            is_valid = "Yes"
-            result = "Pass"
-
-            # Perform checks
-            if not unique_uris:
-                # Check 1: No link at all
-                is_valid = "No"
-                result = "Fail"
-                if verbose:
-                    print(f"  ❌ Page {page}: \"{addr}\" → NO LINK")
-            else:
-                # Check 2 & 5: Wrong link type or wrong target
-                all_valid = True
-                for uri in unique_uris:
-                    if is_email and is_web_uri(uri):
-                        is_valid = "No"
-                        result = "Fail"
-                        all_valid = False
-                        if verbose:
-                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (WRONG TYPE: Email→Web)")
-                    elif is_url and is_email_uri(uri):
-                        is_valid = "No"
-                        result = "Fail"
-                        all_valid = False
-                        if verbose:
-                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (WRONG TYPE: Web→Email)")
-                    elif not addresses_match(addr, uri):
-                        is_valid = "No"
-                        result = "Fail"
-                        all_valid = False
-                        if verbose:
-                            print(f"  ❌ Page {page}: \"{addr}\" → {uri} (MISMATCH)")
-                
-                if all_valid and verbose:
-                    print(f"  ✅ Page {page}: \"{addr}\" → {unique_uris[0]}")
-
-            results.append(CheckResult(
-                pdf_link=addr,
-                hyperlink_text=hyperlink_text,
-                page_num=page,
-                link_type=link_type,
-                is_hyperlinked=is_hyperlinked,
-                is_valid=is_valid,
-                hyperlink_points_to=hyperlink_points_to,
-                result=result
-            ))
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Reporting
-# ---------------------------------------------------------------------------
-
-def render_report(pdf_path: str, results: list[CheckResult]):
-    lines = []
-    sep   = "=" * 72
-
-    lines.append(sep)
-    lines.append("  PDF LINK CHECKER — REPORT")
-    lines.append(f"  File    : {pdf_path}")
-    lines.append(f"  Entries : {len(results)}")
-    lines.append(sep)
-
-    if not results:
-        lines.append("\n✅  No entries found.\n")
-    else:
-        # Count passes and fails
-        passes = sum(1 for r in results if r.result == "Pass")
-        fails = sum(1 for r in results if r.result == "Fail")
-        
-        lines.append(f"\n📊 Summary:")
-        lines.append(f"   ✅ Pass: {passes}")
-        lines.append(f"   ❌ Fail: {fails}")
-        lines.append(f"   📈 Success Rate: {(passes/(passes+fails)*100):.1f}%\n" if (passes+fails) > 0 else "")
-
-    report = "\n".join(lines)
-    print(report)
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Check a PDF for broken/missing/wrong email and web hyperlinks.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+        description="Validate all hyperlinks in a PDF document.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("pdf", help="Path to the PDF file to check")
-    parser.add_argument("--output", "-o", help="Save report to Excel file (.xlsx)", default=None)
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed checks")
+    parser.add_argument("pdf", help="Path to PDF file")
+    parser.add_argument("-o", "--output", help="Output Excel file path (.xlsx)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed validation messages")
+
     args = parser.parse_args()
 
-    results = check_pdf(args.pdf, verbose=args.verbose)
-    render_report(args.pdf, results)
+    # Check file exists
+    if not os.path.exists(args.pdf):
+        print(f"❌ File not found: {args.pdf}")
+        sys.exit(1)
 
+    # Run validation
+    rows = validate_pdf(args.pdf, verbose=args.verbose)
+
+    # Print summary
+    print("=" * 72)
+    passes = sum(1 for r in rows if r.result == "Pass")
+    fails = sum(1 for r in rows if r.result == "Fail")
+    total = len(rows)
+
+    print(f"📊 SUMMARY")
+    print(f"   Total Entries: {total}")
+    print(f"   ✅ Pass: {passes}")
+    print(f"   ❌ Fail: {fails}")
+    if total > 0:
+        success_rate = (passes / total) * 100
+        print(f"   📈 Success Rate: {success_rate:.1f}%")
+    print("=" * 72 + "\n")
+
+    # Export to Excel
     if args.output:
-        if not args.output.lower().endswith('.xlsx'):
-            args.output += '.xlsx'
-        export_to_excel(results, args.output)
+        output_file = args.output if args.output.lower().endswith('.xlsx') else args.output + '.xlsx'
     else:
-        # Default output name
-        import os
-        base_name = os.path.splitext(os.path.basename(args.pdf))[0]
-        default_output = f"{base_name}_link_report.xlsx"
-        export_to_excel(results, default_output)
+        base = os.path.splitext(os.path.basename(args.pdf))[0]
+        output_file = f"{base}_validation_report.xlsx"
 
-    # Exit code: 0 = all pass, 1 = some failed
-    fail_count = sum(1 for r in results if r.result == "Fail")
-    sys.exit(1 if fail_count > 0 else 0)
+    export_excel(rows, output_file)
+
+    # Exit with appropriate code
+    sys.exit(0 if fails == 0 else 1)
 
 
 if __name__ == "__main__":
